@@ -1,4 +1,4 @@
-# IMEHistory for Convenant
+# IMEHistory for Covenant
 
 Covenant Task to display IME history in Japanese environment.
 
