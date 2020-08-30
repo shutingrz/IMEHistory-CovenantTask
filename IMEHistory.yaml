@@ -173,7 +173,7 @@
                     }
                     
                     if (sentence.dwSubSize != iRealSubSize)
-                        textLine.Append(" //[Warn] dwSubSize and iRealSubSize are mismatched."");
+                        textLine.Append(" //[Warn] dwSubSize and iRealSubSize are mismatched.");
                     
                     output.AppendLine(textLine.ToString());                    
                 }
