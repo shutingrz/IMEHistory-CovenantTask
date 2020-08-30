@@ -16,72 +16,21 @@
     using System.IO;
     using System.Text;
     using System.Runtime.InteropServices;
-
+    
     public static class Task
     {
         public static string Execute(string FileName = "")
         {
             try
             {
-                StringBuilder output = new StringBuilder();
-
-                if (string.IsNullOrEmpty(FileName.Trim()))
-                {
-                    string roamingDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData);
-                    string defaultJpnIHDSPath = Path.Combine(roamingDir, "Microsoft\\InputMethod\\Shared\\JpnIHDS.dat");
-                    FileName = defaultJpnIHDSPath;
-                }
-
-                if (!File.Exists(FileName))
-                {
-                    return $"Failed to IMEHistory: File not exists {FileName}";
-                }
-
-                using (var reader = new BinaryReader(File.OpenRead(FileName)))
-                {
-                    var header = JPNIHDS.ReadFrom<JPNIHDS.IMPPRED_HEADER>(reader);
-
-                    for (int i = 0; i < header.dwEntryCount; i++)
-                    {
-                        var sentence = JPNIHDS.ReadFrom<JPNIHDS.IMPPRED_SENTENCE>(reader);
-
-                        DateTime dt = DateTime.FromFileTime((long)sentence.Timestamp);
-
-                        for (int j = 0; j < sentence.bSubEntryCount; j++)
-                        {
-                            var substitution = JPNIHDS.ReadFrom<JPNIHDS.IMPPRED_SUBSTITUTION>(reader);
-
-                            byte[] buf;
-                            buf = reader.ReadBytes(substitution.nInputLen * 2);
-                            string inputText = System.Text.Encoding.Unicode.GetString(buf);
-
-                            buf = reader.ReadBytes(substitution.nResultLen * 2);
-                            string resultText = System.Text.Encoding.Unicode.GetString(buf);
-
-                            string text;
-                            if (substitution.nResultLen == 0)
-                                text = inputText;   
-                            else
-                                text = resultText;
-
-
-                            if (text.Length != 0)
-                            {
-                                string dtStr = dt.ToString("yyyy/MM/dd hh:mm:ss");
-                                string line = $"{dtStr} {text}";
-                                output.AppendLine(line);
-                            }                        
-                        }
-                    }
-                }
-
-                return output.ToString();
+                return JPNIHDS.Parse(FileName);
             }
             catch (Exception e) { return e.GetType().FullName + ": " + e.Message + Environment.NewLine + e.StackTrace; }
         }
     }
-
     static class JPNIHDS {
+        
+        // Reference: https://github.com/sysenter-eip/imppred_parser
         [StructLayout(LayoutKind.Explicit)]
         public struct IMPPRED_HEADER
         {
@@ -100,6 +49,7 @@
             [FieldOffset(28)]
             public UInt32 dwUsedSize;
         }
+    
         [StructLayout(LayoutKind.Explicit)]
         public struct IMPPRED_SENTENCE
         {
@@ -116,26 +66,32 @@
             [FieldOffset(14)]
             public UInt16 wConst_0x00;
         }
+    
         [StructLayout(LayoutKind.Explicit)]
         public struct IMPPRED_SUBSTITUTION
         {
+            // In the reference, nInputLen and nResultLen are reversed.
             [FieldOffset(0)]
             public UInt16 dwSizeOfThisStruct;
             [FieldOffset(2)]
-            public byte nResultLen;
+            public byte nInputLen; 
             [FieldOffset(3)]
-            public byte nInputLen;
+            public byte nResultLen;
             [FieldOffset(4)]
             public UInt32 dwFlags;
         }
+    
         public static T ReadFrom<T>(BinaryReader reader) where T : struct
         {
+            // header
             int size = Marshal.SizeOf(typeof(T));
             IntPtr ptr = IntPtr.Zero;
+    
             try
             {
                 ptr = Marshal.AllocHGlobal(size);
                 Marshal.Copy(reader.ReadBytes(size), 0, ptr, size);
+    
                 return (T)Marshal.PtrToStructure(ptr, typeof(T));
             }
             finally
@@ -145,6 +101,84 @@
                     Marshal.FreeHGlobal(ptr);
                 }
             }
+        }
+    
+        public static string Parse(string FileName="")
+        {
+            StringBuilder output = new StringBuilder();
+    
+            if (string.IsNullOrEmpty(FileName.Trim()))
+            {
+                string roamingDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData);
+                string defaultJpnIHDSPath = Path.Combine(roamingDir, "Microsoft\\InputMethod\\Shared\\JpnIHDS.dat");
+                FileName = defaultJpnIHDSPath;
+            }
+    
+            if (!File.Exists(FileName))
+            {
+                return $"Failed to IMEHistory: File not exists {FileName}";
+            }
+    
+            using (var reader = new BinaryReader(File.OpenRead(FileName)))
+            {
+                var header = ReadFrom<IMPPRED_HEADER>(reader);
+    
+                if (header.dwConst_0x20 != 0x20)
+                    throw new ArgumentOutOfRangeException("header.dwConst_0x20", "The header is corrupted.");
+    
+                DateTime headerTime = DateTime.FromFileTime((long)header.Timestamp);
+                string headerTimeStr = headerTime.ToString("yyyy/MM/dd hh:mm:ss");
+                output.AppendLine($"Last Modified: {headerTimeStr}");
+    
+                for (int i = 0; i < header.dwEntryCount; i++)
+                {
+                    var sentence = ReadFrom<IMPPRED_SENTENCE>(reader);
+    
+                    if (sentence.bConst_0x01 != 0x01 || sentence.wConst_0x00 != 0x00 || sentence.wConst_0x10 != 0x10)
+                        throw new ArgumentOutOfRangeException("sentence", "The sentence header is corrupted.");
+    
+    
+                    StringBuilder textLine = new StringBuilder();
+    
+                    DateTime sentenceTime = DateTime.FromFileTime((long)sentence.Timestamp);
+                    string sentenceTimeStr = sentenceTime.ToString("yyyy/MM/dd hh:mm:ss");
+                    textLine.Append($"{sentenceTimeStr} ");
+    
+                    int iRealSubSize = 0x10;
+                    for (int j = 0; j < sentence.bSubEntryCount; j++)
+                    {
+                        var substitution = ReadFrom<IMPPRED_SUBSTITUTION>(reader);
+    
+                        if (substitution.dwSizeOfThisStruct != substitution.nInputLen * 2 + substitution.nResultLen * 2 + 8)
+                            throw new ArgumentOutOfRangeException("sentence", "The substitute data is corrupted.");
+    
+                        byte[] buf;
+    
+                        buf = reader.ReadBytes(substitution.nInputLen * 2);
+                        string inputText = System.Text.Encoding.Unicode.GetString(buf);
+    
+                        buf = reader.ReadBytes(substitution.nResultLen * 2);
+                        string resultText = System.Text.Encoding.Unicode.GetString(buf);
+    
+                        string text;
+                        if (substitution.nResultLen == 0)
+                            text = inputText;   
+                        else
+                            text = resultText;
+    
+                        if (text.Length != 0)
+                            textLine.Append(text);
+    
+                        iRealSubSize += substitution.dwSizeOfThisStruct;                  
+                    }
+                    
+                    if (sentence.dwSubSize != iRealSubSize)
+                        textLine.Append(" //[Warn] dwSubSize and iRealSubSize is mismatch.");
+                    
+                    output.AppendLine(textLine.ToString());                    
+                }
+            }
+            return output.ToString();
         }
     }
   TaskingType: Assembly
