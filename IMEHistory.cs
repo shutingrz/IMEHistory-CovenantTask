@@ -14,6 +14,7 @@ public static class Task
         catch (Exception e) { return e.GetType().FullName + ": " + e.Message + Environment.NewLine + e.StackTrace; }
     }
 }
+
 static class JPNIHDS {
     
     // Reference: https://github.com/sysenter-eip/imppred_parser
@@ -69,7 +70,6 @@ static class JPNIHDS {
 
     public static T ReadFrom<T>(BinaryReader reader) where T : struct
     {
-        // header
         int size = Marshal.SizeOf(typeof(T));
         IntPtr ptr = IntPtr.Zero;
 
@@ -159,7 +159,7 @@ static class JPNIHDS {
                 }
                 
                 if (sentence.dwSubSize != iRealSubSize)
-                    textLine.Append(" //[Warn] dwSubSize and iRealSubSize is mismatch.");
+                    textLine.Append(" //[Warn] dwSubSize and iRealSubSize are mismatched.");
                 
                 output.AppendLine(textLine.ToString());                    
             }
